@@ -3,6 +3,7 @@ package com.example.mirrorbrowser
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,29 +12,41 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
-    private class Pane(val web: WebView, val frame: FrameLayout)
+    private class Pane(val web: WebView, val frame: FrameLayout, val blocker: View)
+    private enum class Mode { GRID, FOCUS, HIDDEN }
 
     private val panes = mutableListOf<Pane>() // index 0 = source
     private val ui = Handler(Looper.getMainLooper())
+    private val queue = ConcurrentLinkedQueue<String>()
+    private val flushing = AtomicBoolean(false)
     private var paused = false
+    private var mode = Mode.GRID
+    private var lastW = 0
+    private var lastH = 0
     private lateinit var script: String
-    private lateinit var container: LinearLayout
+    private lateinit var container: FrameLayout
     private lateinit var urlInput: EditText
     private lateinit var pauseBtn: Button
+    private lateinit var modeBtn: Button
 
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+    private val MAX_PANES = 11 // 1 source + 10 mirrors
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,28 +69,56 @@ class MainActivity : Activity() {
             paused = !paused
             pauseBtn.text = if (paused) "Resume" else "Pause"
         }
+        modeBtn = button("View: Grid") {
+            mode = Mode.values()[(mode.ordinal + 1) % 3]
+            modeBtn.text = "View: " + mode.name.lowercase().replaceFirstChar { it.uppercase() }
+            if (mode == Mode.HIDDEN) toast("Mirrors keep running in the background")
+            relayout()
+        }
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         listOf(
             pauseBtn,
-            button("+ Tab") { if (panes.size < 7) addPane() else toast("Max 6 mirror tabs") },
-            button("- Tab") { removePane() },
-            button("Sync URL") { syncUrls() }
+            button("+Tab") { if (panes.size < MAX_PANES) addPane() else toast("Max 10 mirror tabs") },
+            button("-Tab") { removePane() },
+            button("Sync") { syncUrls() },
+            modeBtn
         ).forEach { row2.addView(it, LinearLayout.LayoutParams(0, WRAP, 1f)) }
 
-        container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        controls.addView(row1, LinearLayout.LayoutParams(MATCH, WRAP))
+        controls.addView(row2, LinearLayout.LayoutParams(MATCH, WRAP))
 
-        root.addView(row1, LinearLayout.LayoutParams(MATCH, WRAP))
-        root.addView(row2, LinearLayout.LayoutParams(MATCH, WRAP))
+        val barBtn = button("▲ Hide controls") { }
+        barBtn.setOnClickListener {
+            val show = controls.visibility != View.VISIBLE
+            controls.visibility = if (show) View.VISIBLE else View.GONE
+            barBtn.text = if (show) "▲ Hide controls" else "▼ Show controls"
+        }
+
+        container = FrameLayout(this)
+        container.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            if (v.width != lastW || v.height != lastH) {
+                lastW = v.width; lastH = v.height
+                v.post { relayout() }
+            }
+        }
+
+        root.addView(barBtn, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(controls, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(container, LinearLayout.LayoutParams(MATCH, 0, 1f))
         setContentView(root)
 
         addPane() // source (green border)
-        addPane() // first mirror (gray border)
+        addPane() // first mirror
     }
 
     private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
+        textSize = 12f
+        minWidth = 0
+        minimumWidth = 0
+        setPadding(6, 0, 6, 0)
         setOnClickListener { onClick() }
     }
 
@@ -92,18 +133,26 @@ class MainActivity : Activity() {
         val web = WebView(this)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
+        if (Build.VERSION.SDK_INT >= 26) {
+            web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
         web.addJavascriptInterface(Bridge(isSource), "AndroidMirror")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 view?.evaluateJavascript(script, null)
             }
+
+            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                toast("A tab ran out of memory. Remove some tabs.")
+                return true
+            }
         }
         val frame = FrameLayout(this).apply {
-            setPadding(4, 4, 4, 4)
             setBackgroundColor(if (isSource) Color.rgb(46, 160, 67) else Color.GRAY)
         }
-        frame.addView(web, FrameLayout.LayoutParams(MATCH, MATCH))
-        panes.add(Pane(web, frame))
+        frame.addView(web)
+        val blocker = View(this).apply { isClickable = true }
+        panes.add(Pane(web, frame, blocker))
         relayout()
 
         val typed = urlInput.text.toString().trim()
@@ -114,20 +163,67 @@ class MainActivity : Activity() {
     private fun removePane() {
         if (panes.size <= 2) { toast("Need at least 1 mirror tab"); return }
         val p = panes.removeAt(panes.size - 1)
-        relayout()
+        (p.frame.parent as? ViewGroup)?.removeView(p.frame)
         p.frame.removeAllViews()
         p.web.destroy()
+        relayout()
+    }
+
+    private fun fit(p: Pane, w: Int, h: Int, s: Float, pad: Int) {
+        p.frame.setPadding(pad, pad, pad, pad)
+        p.web.pivotX = 0f
+        p.web.pivotY = 0f
+        p.web.scaleX = s
+        p.web.scaleY = s
+        p.web.layoutParams = FrameLayout.LayoutParams(w, h)
     }
 
     private fun relayout() {
-        panes.forEach { (it.frame.parent as? ViewGroup)?.removeView(it.frame) }
+        val w = container.width
+        val h = container.height
+        if (w == 0 || h == 0 || panes.isEmpty()) return
+        panes.forEach { p ->
+            (p.frame.parent as? ViewGroup)?.removeView(p.frame)
+            p.frame.removeView(p.blocker)
+            p.frame.visibility = View.VISIBLE
+            fit(p, MATCH, MATCH, 1f, 4)
+        }
         container.removeAllViews()
-        val cols = if (panes.size <= 2) 1 else 2
-        panes.chunked(cols).forEach { group ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            group.forEach { row.addView(it.frame, LinearLayout.LayoutParams(0, MATCH, 1f)) }
-            repeat(cols - group.size) { row.addView(View(this), LinearLayout.LayoutParams(0, MATCH, 1f)) }
-            container.addView(row, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        when (mode) {
+            Mode.GRID -> {
+                val cols = if (panes.size <= 2) 1 else 2
+                panes.chunked(cols).forEach { g ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                    g.forEach { row.addView(it.frame, LinearLayout.LayoutParams(0, MATCH, 1f)) }
+                    repeat(cols - g.size) { row.addView(View(this), LinearLayout.LayoutParams(0, MATCH, 1f)) }
+                    root.addView(row, LinearLayout.LayoutParams(MATCH, 0, 1f))
+                }
+                container.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
+            }
+            Mode.FOCUS -> {
+                val stripH = h / 4
+                val srcH = h - stripH
+                val mw = w - 8
+                val mh = srcH - 8
+                val s = stripH.toFloat() / mh
+                root.addView(panes[0].frame, LinearLayout.LayoutParams(MATCH, srcH))
+                val strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                panes.drop(1).forEach { p ->
+                    fit(p, mw, mh, s, 0)
+                    p.frame.addView(p.blocker, FrameLayout.LayoutParams(MATCH, MATCH))
+                    strip.addView(p.frame, LinearLayout.LayoutParams((mw * s).toInt(), stripH).apply { rightMargin = 6 })
+                }
+                root.addView(HorizontalScrollView(this).apply { addView(strip) }, LinearLayout.LayoutParams(MATCH, stripH))
+                container.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
+            }
+            Mode.HIDDEN -> {
+                panes.drop(1).forEach { p ->
+                    p.frame.visibility = View.INVISIBLE
+                    container.addView(p.frame, FrameLayout.LayoutParams(MATCH, MATCH))
+                }
+                container.addView(panes[0].frame, FrameLayout.LayoutParams(MATCH, MATCH))
+            }
         }
     }
 
@@ -144,7 +240,17 @@ class MainActivity : Activity() {
         toast("Mirror tabs reloaded to source URL")
     }
 
-    /** One bridge per WebView; only the source's events are forwarded. */
+    private fun flush() {
+        flushing.set(false)
+        val list = ArrayList<String>()
+        while (true) list.add(queue.poll() ?: break)
+        if (list.isEmpty()) return
+        val arg = JSONObject.quote("[" + list.joinToString(",") + "]")
+        val js = "window.__mirrorReplay && window.__mirrorReplay($arg)"
+        for (i in 1 until panes.size) panes[i].web.evaluateJavascript(js, null)
+    }
+
+    /** One bridge per WebView; only the source's events are forwarded, in batches. */
     inner class Bridge(private val source: Boolean) {
         @JavascriptInterface
         fun isSource(): Boolean = source
@@ -152,14 +258,8 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun send(json: String) {
             if (!source || paused) return
-            val arg = JSONObject.quote(json)
-            ui.post {
-                for (i in 1 until panes.size) {
-                    panes[i].web.evaluateJavascript(
-                        "window.__mirrorReplay && window.__mirrorReplay($arg)", null
-                    )
-                }
-            }
+            queue.add(json)
+            if (flushing.compareAndSet(false, true)) ui.postDelayed({ flush() }, 8)
         }
     }
 
