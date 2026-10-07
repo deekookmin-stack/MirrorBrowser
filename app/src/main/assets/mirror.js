@@ -33,16 +33,13 @@
 
   /* ---------------- SOURCE: capture and forward ---------------- */
   if (isSource) {
-    // Taps / clicks
     document.addEventListener('click', function (e) {
       if (!e.isTrusted) return;
       var t = e.target;
-      // checkboxes/radios are synced through their 'change' event instead
       if (t.tagName === 'INPUT' && (t.type === 'checkbox' || t.type === 'radio')) return;
       send({ t: 'click', s: selector(t) });
     }, true);
 
-    // Typing, selects, toggles
     function onValue(e) {
       if (!e.isTrusted) return;
       var el = e.target, o = { t: 'val', s: selector(el) };
@@ -54,14 +51,24 @@
     document.addEventListener('input', onValue, true);
     document.addEventListener('change', onValue, true);
 
-    // Enter key (soft keyboards report typing as input events, Enter as a key)
     document.addEventListener('keydown', function (e) {
       if (!e.isTrusted || e.key !== 'Enter') return;
       send({ t: 'key', s: selector(e.target), k: 'Enter' });
     }, true);
 
-    // Scrolling (page + inner scroll containers), as ratios so sizes may differ
-    var sp = {}, sraf = false;
+    // Scrolling: throttled to ~25 updates/sec, selectors cached
+    var sp = {}, timer = null, last = 0, cache = new WeakMap();
+    function cached(el) {
+      var s = cache.get(el);
+      if (!s) { s = selector(el); cache.set(el, s); }
+      return s;
+    }
+    function flushScroll() {
+      timer = null;
+      last = Date.now();
+      for (var k in sp) send({ t: 'scroll', s: k, y: sp[k] });
+      sp = {};
+    }
     document.addEventListener('scroll', function (e) {
       var t = e.target, key, r, m;
       if (t === document || t === document.documentElement || t === document.body) {
@@ -69,28 +76,17 @@
         m = document.documentElement.scrollHeight - window.innerHeight;
         r = m > 0 ? window.scrollY / m : 0;
       } else if (t.nodeType === 1) {
-        key = selector(t);
+        key = cached(t);
         m = t.scrollHeight - t.clientHeight;
         r = m > 0 ? t.scrollTop / m : 0;
       } else return;
       sp[key] = r;
-      if (!sraf) {
-        sraf = true;
-        requestAnimationFrame(function () {
-          sraf = false;
-          for (var k in sp) send({ t: 'scroll', s: k, y: sp[k] });
-          sp = {};
-        });
-      }
+      if (!timer) timer = setTimeout(flushScroll, Math.max(0, 40 - (Date.now() - last)));
     }, true);
   }
 
   /* ---------------- TARGETS: replay ---------------- */
-  window.__mirrorReplay = function (json) {
-    if (isSource) return;
-    var o;
-    try { o = JSON.parse(json); } catch (e) { return; }
-
+  function apply(o) {
     if (o.t === 'scroll' && !o.s) {
       var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
       try { window.scrollTo({ top: o.y * max, left: window.scrollX, behavior: 'instant' }); }
@@ -122,7 +118,6 @@
           el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       } else if (el.value !== o.v) {
-        // native setter so React/Vue-style frameworks notice the change
         var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype
                   : el.tagName === 'SELECT' ? HTMLSelectElement.prototype
                   : HTMLInputElement.prototype;
@@ -141,6 +136,16 @@
       if (ok && form && el.tagName === 'INPUT') {
         if (form.requestSubmit) form.requestSubmit(); else form.submit();
       }
+    }
+  }
+
+  window.__mirrorReplay = function (json) {
+    if (isSource) return;
+    var list;
+    try { list = JSON.parse(json); } catch (e) { return; }
+    if (!Array.isArray(list)) list = [list];
+    for (var i = 0; i < list.length; i++) {
+      try { apply(list[i]); } catch (e) {}
     }
   };
 })();
