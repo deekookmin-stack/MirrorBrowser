@@ -38,6 +38,9 @@ class MainActivity : Activity() {
     private var mode = Mode.GRID
     private var lastW = 0
     private var lastH = 0
+    private var fullH = 0
+    private var stripView: View? = null
+    private var srcFrame: View? = null
     private lateinit var script: String
     private lateinit var container: FrameLayout
     private lateinit var urlInput: EditText
@@ -97,9 +100,23 @@ class MainActivity : Activity() {
 
         container = FrameLayout(this)
         container.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            if (v.width != lastW || v.height != lastH) {
-                lastW = v.width; lastH = v.height
+            val w = v.width
+            val h = v.height
+            if (w != lastW) {
+                // first layout or rotation: full rebuild
+                lastW = w; lastH = h; fullH = h
                 v.post { relayout() }
+            } else if (h != lastH) {
+                // keyboard opened or closed: resize in place, never rebuild
+                lastH = h
+                if (h > fullH) fullH = h
+                val kb = h < fullH * 0.8f
+                stripView?.visibility = if (kb) View.GONE else View.VISIBLE
+                srcFrame?.let { f ->
+                    val lp = f.layoutParams
+                    lp.height = if (kb) h else fullH - fullH / 4
+                    f.layoutParams = lp
+                }
             }
         }
 
@@ -182,6 +199,8 @@ class MainActivity : Activity() {
         val w = container.width
         val h = container.height
         if (w == 0 || h == 0 || panes.isEmpty()) return
+        stripView = null
+        srcFrame = null
         panes.forEach { p ->
             (p.frame.parent as? ViewGroup)?.removeView(p.frame)
             p.frame.removeView(p.blocker)
@@ -214,7 +233,10 @@ class MainActivity : Activity() {
                     p.frame.addView(p.blocker, FrameLayout.LayoutParams(MATCH, MATCH))
                     strip.addView(p.frame, LinearLayout.LayoutParams((mw * s).toInt(), stripH).apply { rightMargin = 6 })
                 }
-                root.addView(HorizontalScrollView(this).apply { addView(strip) }, LinearLayout.LayoutParams(MATCH, stripH))
+                val sv = HorizontalScrollView(this).apply { addView(strip) }
+                stripView = sv
+                srcFrame = panes[0].frame
+                root.addView(sv, LinearLayout.LayoutParams(MATCH, stripH))
                 container.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
             }
             Mode.HIDDEN -> {
