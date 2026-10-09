@@ -33,11 +33,23 @@
 
   /* ---------------- SOURCE: capture and forward ---------------- */
   if (isSource) {
+    var BTN = 'button, a[href], [role="button"], input[type="submit"], input[type="button"]';
+
+    // Taps: normal mirroring, or "fire sync" for buttons/links when armed
     document.addEventListener('click', function (e) {
       if (!e.isTrusted) return;
       var t = e.target;
       if (t.tagName === 'INPUT' && (t.type === 'checkbox' || t.type === 'radio')) return;
-      send({ t: 'click', s: selector(t) });
+      var armed = false;
+      try { armed = B.armed(); } catch (err) {}
+      var b = (armed && t.closest) ? t.closest(BTN) : null;
+      if (b) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        try { B.fire(JSON.stringify({ t: 'click', s: selector(b), f: 1 })); } catch (err) {}
+      } else {
+        send({ t: 'click', s: selector(t) });
+      }
     }, true);
 
     function onValue(e) {
@@ -51,9 +63,21 @@
     document.addEventListener('input', onValue, true);
     document.addEventListener('change', onValue, true);
 
+    // Enter: normal mirroring, or "fire sync" when armed
     document.addEventListener('keydown', function (e) {
       if (!e.isTrusted || e.key !== 'Enter') return;
-      send({ t: 'key', s: selector(e.target), k: 'Enter' });
+      var t = e.target;
+      var o = { t: 'key', s: selector(t), k: 'Enter' };
+      var armed = false;
+      try { armed = B.armed(); } catch (err) {}
+      if (armed && t.tagName !== 'TEXTAREA' && !t.isContentEditable) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        o.f = 1;
+        try { B.fire(JSON.stringify(o)); } catch (err) {}
+      } else {
+        send(o);
+      }
     }, true);
 
     // Scrolling: throttled to ~25 updates/sec, selectors cached
@@ -85,7 +109,7 @@
     }, true);
   }
 
-  /* ---------------- TARGETS: replay ---------------- */
+  /* ---------------- REPLAY (mirrors, and the source when firing) ---------------- */
   function apply(o) {
     if (o.t === 'scroll' && !o.s) {
       var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
@@ -135,6 +159,8 @@
       var form = el.form;
       if (ok && form && el.tagName === 'INPUT') {
         if (form.requestSubmit) form.requestSubmit(); else form.submit();
+      } else if (ok && o.f && (el.tagName === 'BUTTON' || el.tagName === 'A')) {
+        el.click();
       }
     }
   }
@@ -147,5 +173,12 @@
     for (var i = 0; i < list.length; i++) {
       try { apply(list[i]); } catch (e) {}
     }
+  };
+
+  // Synchronized fire: runs in the source AND every mirror
+  window.__mirrorFire = function (json) {
+    var o;
+    try { o = JSON.parse(json); } catch (e) { return; }
+    try { apply(o); } catch (e) {}
   };
 })();
