@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- back window (the mirror) -->
+    <path
+        android:fillColor="#99FFFFFF"
+        android:pathData="M38,32 H60 Q66,32 66,38 V60 Q66,66 60,66 H38 Q32,66 32,60 V38 Q32,32 38,32 Z" />
+
+    <!-- front window (the source) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M47,40 H67 Q74,40 74,47 V69 Q74,76 67,76 H47 Q40,76 40,69 V47 Q40,40 47,40 Z" />
+
+    <!-- green "source" dot -->
+    <path
+        android:fillColor="#2EA043"
+        android:pathData="M46,43.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 Z" />
+
+    <!-- heart -->
+    <path
+        android:fillColor="#FF6F9C"
+        android:pathData="M57,67 C50,62 48,58.5 48,55.5 C48,52.8 50,51 52.4,51 C54.4,51 56,52.2 57,54 C58,52.2 59.6,51 61.6,51 C64,51 66,52.8 66,55.5 C66,58.5 64,62 57,67 Z" />
+</vector>
