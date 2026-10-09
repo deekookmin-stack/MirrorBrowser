@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private val queue = ConcurrentLinkedQueue<String>()
     private val flushing = AtomicBoolean(false)
     private var paused = false
+    @Volatile private var armed = false
     private var mode = Mode.GRID
     private var lastW = 0
     private var lastH = 0
@@ -46,10 +47,12 @@ class MainActivity : Activity() {
     private lateinit var urlInput: EditText
     private lateinit var pauseBtn: Button
     private lateinit var modeBtn: Button
+    private lateinit var fireBtn: Button
 
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
     private val MAX_PANES = 11 // 1 source + 10 mirrors
+    private val FIRE_DELAY = 40L // ms between pressing Enter/tap and the synchronized fire
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,9 +90,18 @@ class MainActivity : Activity() {
             modeBtn
         ).forEach { row2.addView(it, LinearLayout.LayoutParams(0, WRAP, 1f)) }
 
+        fireBtn = button("Fire sync: Off") {
+            armed = !armed
+            fireBtn.text = if (armed) "Fire sync: ON" else "Fire sync: Off"
+            if (armed) toast("Enter and button taps now fire in all tabs together")
+        }
+        val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row3.addView(fireBtn, LinearLayout.LayoutParams(0, WRAP, 1f))
+
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         controls.addView(row1, LinearLayout.LayoutParams(MATCH, WRAP))
         controls.addView(row2, LinearLayout.LayoutParams(MATCH, WRAP))
+        controls.addView(row3, LinearLayout.LayoutParams(MATCH, WRAP))
 
         val barBtn = button("▲ Hide controls") { }
         barBtn.setOnClickListener {
@@ -278,10 +290,26 @@ class MainActivity : Activity() {
         fun isSource(): Boolean = source
 
         @JavascriptInterface
+        fun armed(): Boolean = source && armed && !paused
+
+        @JavascriptInterface
         fun send(json: String) {
             if (!source || paused) return
             queue.add(json)
             if (flushing.compareAndSet(false, true)) ui.postDelayed({ flush() }, 8)
+        }
+
+        /** Armed Enter/tap: deliver pending typing first, then fire in ALL tabs at once. */
+        @JavascriptInterface
+        fun fire(json: String) {
+            if (!source || paused) return
+            ui.post {
+                flush()
+                ui.postDelayed({
+                    val js = "window.__mirrorFire && window.__mirrorFire(${JSONObject.quote(json)})"
+                    for (p in panes) p.web.evaluateJavascript(js, null)
+                }, FIRE_DELAY)
+            }
         }
     }
 
