@@ -3,6 +3,7 @@ package com.example.mirrorbrowser
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -30,6 +31,16 @@ class MainActivity : Activity() {
     private class Pane(val web: WebView, val frame: FrameLayout, val blocker: View)
     private enum class Mode { GRID, FOCUS, HIDDEN }
 
+    // ---- Theme colors (change the hex codes to restyle the app) ----
+    private val PINK = Color.parseColor("#FF8FB1")
+    private val PINK_SOFT = Color.parseColor("#FFD6E4")
+    private val BG = Color.parseColor("#FFF0F5")
+    private val TEXT = Color.parseColor("#5A2A40")
+    private val HINT = Color.parseColor("#B98AA0")
+    private val GREEN = Color.parseColor("#2EA043")
+    private val AMBER = Color.parseColor("#F2A33A")
+    private val MIRROR_BORDER = Color.parseColor("#F4B6C9")
+
     private val panes = mutableListOf<Pane>() // index 0 = source
     private val ui = Handler(Looper.getMainLooper())
     private val queue = ConcurrentLinkedQueue<String>()
@@ -54,26 +65,53 @@ class MainActivity : Activity() {
     private val MAX_PANES = 11 // 1 source + 10 mirrors
     private val FIRE_DELAY = 40L // ms between pressing Enter/tap and the synchronized fire
 
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun pill(c: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(c)
+        cornerRadius = dp(18).toFloat()
+    }
+
+    private fun recolor(b: Button, c: Int) {
+        b.background = pill(c)
+    }
+
+    private fun mlp(w: Int, h: Int, weight: Float): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(w, h, weight).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = PINK
         script = assets.open("mirror.js").bufferedReader().use { it.readText() }
 
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BG)
+        }
 
         urlInput = EditText(this).apply {
             hint = "Site URL (e.g. example.com)"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
+            setTextColor(TEXT)
+            setHintTextColor(HINT)
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), PINK)
+            }
             setOnEditorActionListener { _, _, _ -> loadAll(); true }
         }
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row1.addView(urlInput, LinearLayout.LayoutParams(0, WRAP, 1f))
-        row1.addView(button("Load") { loadAll() })
+        row1.addView(urlInput, mlp(0, dp(44), 1f))
+        row1.addView(button("Load") { loadAll() }, mlp(WRAP, dp(40), 0f))
 
         pauseBtn = button("Pause") {
             paused = !paused
             pauseBtn.text = if (paused) "Resume" else "Pause"
+            recolor(pauseBtn, if (paused) AMBER else PINK)
         }
         modeBtn = button("View: Grid") {
             mode = Mode.values()[(mode.ordinal + 1) % 3]
@@ -88,29 +126,30 @@ class MainActivity : Activity() {
             button("-Tab") { removePane() },
             button("Sync") { syncUrls() },
             modeBtn
-        ).forEach { row2.addView(it, LinearLayout.LayoutParams(0, WRAP, 1f)) }
+        ).forEach { row2.addView(it, mlp(0, dp(40), 1f)) }
 
         fireBtn = button("Fire sync: Off") {
             armed = !armed
             fireBtn.text = if (armed) "Fire sync: ON" else "Fire sync: Off"
+            recolor(fireBtn, if (armed) GREEN else PINK)
             if (armed) toast("Enter and button taps now fire in all tabs together")
         }
         val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row3.addView(fireBtn, LinearLayout.LayoutParams(0, WRAP, 1f))
+        row3.addView(fireBtn, mlp(0, dp(40), 1f))
 
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         controls.addView(row1, LinearLayout.LayoutParams(MATCH, WRAP))
         controls.addView(row2, LinearLayout.LayoutParams(MATCH, WRAP))
         controls.addView(row3, LinearLayout.LayoutParams(MATCH, WRAP))
 
-        val barBtn = button("▲ Hide controls") { }
+        val barBtn = button("▲ Hide controls", PINK_SOFT, TEXT) { }
         barBtn.setOnClickListener {
             val show = controls.visibility != View.VISIBLE
             controls.visibility = if (show) View.VISIBLE else View.GONE
             barBtn.text = if (show) "▲ Hide controls" else "▼ Show controls"
         }
 
-        container = FrameLayout(this)
+        container = FrameLayout(this).apply { setBackgroundColor(BG) }
         container.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             val w = v.width
             val h = v.height
@@ -132,7 +171,7 @@ class MainActivity : Activity() {
             }
         }
 
-        root.addView(barBtn, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(barBtn, mlp(MATCH, dp(34), 0f))
         root.addView(controls, LinearLayout.LayoutParams(MATCH, WRAP))
         root.addView(container, LinearLayout.LayoutParams(MATCH, 0, 1f))
         setContentView(root)
@@ -141,13 +180,22 @@ class MainActivity : Activity() {
         addPane() // first mirror
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
+    private fun button(
+        label: String,
+        c: Int = PINK,
+        textColor: Int = Color.WHITE,
+        onClick: () -> Unit
+    ) = Button(this).apply {
         text = label
         isAllCaps = false
         textSize = 12f
         minWidth = 0
         minimumWidth = 0
-        setPadding(6, 0, 6, 0)
+        minHeight = 0
+        minimumHeight = 0
+        setPadding(dp(6), 0, dp(6), 0)
+        background = pill(c)
+        setTextColor(textColor)
         setOnClickListener { onClick() }
     }
 
@@ -177,7 +225,7 @@ class MainActivity : Activity() {
             }
         }
         val frame = FrameLayout(this).apply {
-            setBackgroundColor(if (isSource) Color.rgb(46, 160, 67) else Color.GRAY)
+            setBackgroundColor(if (isSource) GREEN else MIRROR_BORDER)
         }
         frame.addView(web)
         val blocker = View(this).apply { isClickable = true }
