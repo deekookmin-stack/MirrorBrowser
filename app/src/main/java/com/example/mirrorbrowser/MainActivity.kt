@@ -62,7 +62,7 @@ class MainActivity : Activity() {
 
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-    private val MAX_PANES = 11 // 1 source + 10 mirrors
+    private val MAX_PANES = 21 // 1 source + 20 mirrors
     private val FIRE_DELAY = 40L // ms between pressing Enter/tap and the synchronized fire
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -122,7 +122,7 @@ class MainActivity : Activity() {
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         listOf(
             pauseBtn,
-            button("+Tab") { if (panes.size < MAX_PANES) addPane() else toast("Max 10 mirror tabs") },
+            button("+Tab") { if (panes.size < MAX_PANES) addPane() else toast("Max 20 mirror tabs") },
             button("-Tab") { removePane() },
             button("Sync") { syncUrls() },
             modeBtn
